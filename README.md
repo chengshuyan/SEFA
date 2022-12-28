@@ -1,8 +1,12 @@
-# Feature Importance-aware Attack(FIA)
+# Diverse Perturbations on Feature Space Based Transferable Adversarial Attacks (DFA)
 
 This repository contains the code for the paper: 
 
-**[Feature Importance-aware Transferable Adversarial Attacks](https://arxiv.org/pdf/2107.14185.pdf)  (ICCV 2021)**
+**[Diverse Perturbations on Feature Space Based Transferable Adversarial Attacks]**
+
+##Motivation
+
+Transferability of adversarial attacks has recently received much attention, which facilitates adversarial attacks in more practical settings. Nevertheless, existing transferable attacks craft adversarial examples in a deterministic manner, thus trapping into a poor local optimum and significantly degrading the transferability. By contrast, we propose the Diverse-Feature Attack (DFA), which disrupts salient features in a stochastic method to upgrade transferability. More specifically, perturbations in the weighted intermediate features disrupt universal features shared by different models. The weight is obtained by refining aggregate gradient, which adjust the averaged gradient with respect to feature map of the source model. Then, diverse orthogonal initial perturbations disrupt these features in a stochastic manner, searching the space of transferable perturbations more exhaustively to effectively avoid poor local optima. Extensive experiments confirm the superiority of our approach to the existing attacks.
 
 ## Requirements
 
@@ -16,9 +20,9 @@ This repository contains the code for the paper:
 
 #### Introduction
 
-- `attack.py` : the implementation for different attacks.
+- `attack_delta.py` : the implementation for different attacks.
 
-- `verify.py` : the code for evaluating generated adversarial examples on different models.
+- `verify-1.py` : the code for evaluating generated adversarial examples on different models.
 
   You should download the  pretrained models from ( https://github.com/tensorflow/models/tree/master/research/slim,  https://github.com/tensorflow/models/tree/archive/research/adv_imagenet_models) before running the code. Then place these model checkpoint files in `./models_tf`.
 
@@ -26,22 +30,10 @@ This repository contains the code for the paper:
 
 ##### Generate adversarial examples:
 
-- FIA
+- DFA
 
 ```
-python attack.py --model_name vgg_16 --attack_method FIA --layer_name vgg_16/conv3/conv3_3/Relu --ens 30 --probb 0.7 --output_dir ./adv/FIA/
-```
-
-- PIM:
-
-```
-python attack.py --model_name vgg_16 --attack_method PIM --amplification_factor 10 --gamma 1 --Pkern_size 3 --output_dir ./adv/PIM/
-```
-
-- FIA+PIDIM
-
-```
-python attack.py --model_name vgg_16 --attack_method FIAPIDIM --layer_name vgg_16/conv3/conv3_3/Relu --ens 30 --probb 0.7 --amplification_factor 2.5 --gamma 0.5 --Pkern_size 3 --image_size 224 --image_resize 250 --prob 0.7 --output_dir ./adv/FIAPIDIM/
+python attack.py --model_name vgg_16 --attack_method DFA --layer_name vgg_16/conv3/conv3_3/Relu --ens 30 --probb 0.9 --output_dir ./adv/DFA/
 ```
 
 Different attack methods have different parameter setting, and the detailed setting can be found in our paper.
@@ -49,7 +41,7 @@ Different attack methods have different parameter setting, and the detailed sett
 ##### Evaluate the attack success rate
 
 ```
-python verify.py --ori_path ./dataset/images/ --adv_path ./adv/FIA/ --output_file ./log.csv
+python verify-1.py --ori_path ./dataset/images/ --adv_path ./adv/FIA/ --output_file ./log.csv
 ```
 
 ## Citing this work
@@ -57,11 +49,9 @@ python verify.py --ori_path ./dataset/images/ --adv_path ./adv/FIA/ --output_fil
 If you find this work is useful in your research, please consider citing:
 
 ```
-@inproceedings{wang2021feature,
-  title={Feature importance-aware transferable adversarial attacks},
-  author={Wang, Zhibo and Guo, Hengchang and Zhang, Zhifei and Liu, Wenxin and Qin, Zhan and Ren, Kui},
-  booktitle={Proceedings of the IEEE/CVF International Conference on Computer Vision},
-  pages={7639--7648},
-  year={2021}
+@inproceedings{Cheng2023,
+  title={Diverse Perturbations on Feature Space Based Transferable Adversarial Attacks},
+  author={Shuyan Cheng, Peng Li, Jianguo Liu, He Xv, Ruchuan Wang},
+  year={2023}
   }
 ```
