@@ -13,18 +13,27 @@ from scipy import misc
 from scipy import ndimage
 from PIL import Image
 import io
+import darkon
 
 slim = tf.contrib.slim
 
-tf.flags.DEFINE_string('model_name', 'vgg_16', 'The Model used to generate adv.')
+# tf.flags.DEFINE_string('attack_method', 'FIA', 'The name of attack method.')
+
+# tf.flags.DEFINE_string('model_name', 'vgg_16', 'The Model used to generate adv.')
+
+# tf.flags.DEFINE_string('layer_name','vgg_16/conv3/conv3_3/Relu','The layer to be attacked.')
+
+# tf.flags.DEFINE_string('output_dir', './adv/FIA/', 'Output directory with images.')
 
 tf.flags.DEFINE_string('attack_method', 'FIA', 'The name of attack method.')
 
-tf.flags.DEFINE_string('layer_name','vgg_16/conv3/conv3_3/Relu','The layer to be attacked.')
+tf.flags.DEFINE_string('model_name', 'inception_v3', 'The Model used to generate adv.')
+
+tf.flags.DEFINE_string('layer_name','InceptionV3/InceptionV3/Mixed_5b/concat','The layer to be attacked.')
+
+tf.flags.DEFINE_string('output_dir', './adv/TFA/', 'Output directory with images.')
 
 tf.flags.DEFINE_string('input_dir', './dataset/images/', 'Input directory with images.')
-
-tf.flags.DEFINE_string('output_dir', './adv/FIA/', 'Output directory with images.')
 
 tf.flags.DEFINE_string('valid_dir', '../PSBA-master/raw_data/imagenet/ILSVRC2012_img_val/', 'Output directory with images.')
 
@@ -65,7 +74,7 @@ tf.flags.DEFINE_float('ens', 0, 'Number of random mask input.')
 tf.flags.DEFINE_float('probb', 0.9, 'keep probability = 1 - drop probability.')
 
 """parameter for PullPush"""
-tf.flags.DEFINE_float('interval', 0, 'keep probability = 1 - drop probability.')
+tf.flags.DEFINE_float('interval', 10, 'keep probability = 1 - drop probability.')
 
 FLAGS = tf.flags.FLAGS
 os.environ["CUDA_VISIBLE_DEVICES"] = FLAGS.GPU_ID
@@ -119,12 +128,12 @@ def get_fia_loss(opt_operations,weights):
     loss = loss / len(opt_operations)
     return loss
 
-def get_tfa_loss(opt_operations,weights_tgt_placeholder,weights_src_placeholder):
+def get_tfa_loss(opt_operations,weights_tgt_placeholder,weights_ori_placeholder):
     loss = 0
     for layer in opt_operations:
         ori_tensor = layer[:FLAGS.batch_size]
         adv_tensor = layer[FLAGS.batch_size:FLAGS.batch_size*2]
-        loss -= tf.reduce_sum(adv_tensor*weights_src_placeholder)/tf.cast(tf.size(layer),tf.float32)
+        loss -= tf.reduce_sum(adv_tensor*weights_ori_placeholder)/tf.cast(tf.size(layer),tf.float32)
         loss += tf.reduce_sum(adv_tensor*weights_tgt_placeholder)/tf.cast(tf.size(layer),tf.float32)
     loss = loss / len(opt_operations)
     return loss
@@ -132,11 +141,23 @@ def get_tfa_loss(opt_operations,weights_tgt_placeholder,weights_src_placeholder)
 def get_pp_loss(opt_operations,interval):
     loss = 0
     for layer in opt_operations:
+        ori_tensor = layer[:FLAGS.batch_size] #ori
+        adv_tensor = layer[FLAGS.batch_size:FLAGS.batch_size*2]
+        tgt_tensor = layer[FLAGS.batch_size*2:] #tgt
+        loss += tf.norm(tgt_tensor-adv_tensor)/tf.cast(tf.size(layer),tf.float32)
+        loss -= tf.norm(ori_tensor-adv_tensor)/tf.cast(tf.size(layer),tf.float32)
+        loss1 = tf.norm(tgt_tensor-adv_tensor)/tf.cast(tf.size(layer),tf.float32)
+        loss2 = tf.norm(ori_tensor-adv_tensor)/tf.cast(tf.size(layer),tf.float32)
+    loss = loss / len(opt_operations)
+    return loss,loss1,loss2
+
+def get_nrdm_loss(opt_operations):
+    loss = 0
+    for layer in opt_operations:
         ori_tensor = layer[:FLAGS.batch_size]
         adv_tensor = layer[FLAGS.batch_size:FLAGS.batch_size*2]
-        src_tensor = layer[FLAGS.batch_size*2:]
-        loss += tf.norm(src_tensor-adv_tensor)/tf.cast(tf.size(layer),tf.float32)
-        loss -= tf.norm(ori_tensor-adv_tensor)/tf.cast(tf.size(layer),tf.float32)
+        loss+=tf.norm(ori_tensor-adv_tensor)/tf.cast(tf.size(layer),tf.float32)
+    loss = loss / len(opt_operations)
     return loss
 
 def normalize(grad,opt=2):
@@ -150,6 +171,7 @@ def normalize(grad,opt=2):
         nor_grad=grad/np.sqrt(square)
     return nor_grad
 
+#实现batch图片的卷积——深度卷积
 def project_kern(kern_size):
     kern = np.ones((kern_size, kern_size), dtype=np.float32) / (kern_size ** 2 - 1)
     kern[kern_size // 2, kern_size // 2] = 0.0
@@ -230,7 +252,7 @@ def main(_):
     else:
         eps = 2.0 * FLAGS.max_epsilon / 255.0
         alpha = FLAGS.alpha * 2.0 / 255.0
-
+    FLAGS.image_size=utils.image_size[FLAGS.model_name]
     num_iter = FLAGS.num_iter
     momentum = FLAGS.momentum
 
@@ -241,9 +263,10 @@ def main(_):
     layer_name=FLAGS.layer_name
 
     with tf.Graph().as_default():
+
         # Prepare graph
         ori_input = tf.placeholder(tf.float32, shape=batch_shape)
-        src_input = tf.placeholder(tf.float32, shape=batch_shape)
+        tgt_input = tf.placeholder(tf.float32, shape=batch_shape)
         adv_input = tf.placeholder(tf.float32, shape=batch_shape)
         num_classes = 1000 + utils.offset[FLAGS.model_name]
         label_ph = tf.placeholder(tf.float32, shape=[FLAGS.batch_size*3,num_classes])
@@ -251,7 +274,15 @@ def main(_):
         amplification_ph = tf.placeholder(dtype=tf.float32, shape=batch_shape)
 
         network_fn = utils.nets_factory.get_network_fn(FLAGS.model_name, num_classes=num_classes, is_training=False)
-        x=tf.concat([ori_input,adv_input,src_input],axis=0)
+        x=tf.concat([ori_input,adv_input,tgt_input],axis=0)
+
+        # single_shape = [1,FLAGS.image_size, FLAGS.image_size, 3]
+        # single_input = tf.placeholder(tf.float32,shape=single_shape)
+        # W_s_input = tf.placeholder(tf.float32,shape=batch_shape)
+        # logits_single, end_points = network_fn(single_input)
+        # graph = tf.get_default_graph()
+        # insp = darkon.Gradcam(single_input,num_classes,layer_name,graph=graph)
+        # prob = insp._prob_ts
 
         # whether using DIM or not
         if 'DI' in FLAGS.attack_method:
@@ -267,24 +298,30 @@ def main(_):
 
         opt_operations,shape = get_opt_layers(layer_name)
         weights_tgt_placeholder = tf.placeholder(dtype=tf.float32, shape=shape)
-        weights_src_placeholder = tf.placeholder(dtype=tf.float32, shape=shape)
+        weights_ori_placeholder = tf.placeholder(dtype=tf.float32, shape=shape)
 
         # select the loss function
         if 'FDA' in FLAGS.attack_method:
             loss = get_fda_loss(opt_operations)
         elif 'NRDM' in FLAGS.attack_method:
-            loss = -get_nrdm_loss(opt_operations)
+            loss = get_nrdm_loss(opt_operations)
         elif 'FIA' in FLAGS.attack_method:
             weights_tensor = tf.gradients(logits * label_ph, opt_operations[0])[0]
             loss = -get_fia_loss(opt_operations,weights_tgt_placeholder)
         elif 'TFA' in FLAGS.attack_method:
             weights_tensor = tf.gradients(logits * label_ph, opt_operations[0])[0]
-            loss = -get_tfa_loss(opt_operations,weights_tgt_placeholder,weights_src_placeholder)
+            loss = -get_tfa_loss(opt_operations,weights_tgt_placeholder,weights_ori_placeholder)
         elif 'PP' in FLAGS.attack_method:
-            loss = get_pp_loss(opt_operations,FLAGS.interval)
+            weights_tensor = tf.gradients(logits * label_ph, opt_operations[0])[0]
+            loss,loss1,loss2 = get_pp_loss(opt_operations,FLAGS.interval)
+            loss = -loss
         else:
             loss = -entropy_loss
 
+        #W_s
+
+
+        #############
         gradient=tf.gradients(loss,adv_input)[0]
 
         noise = gradient
@@ -308,7 +345,7 @@ def main(_):
             # Project cut noise
             amplification_update += alpha_beta * tf.sign(noise)
             cut_noise = tf.clip_by_value(abs(amplification_update) - eps, 0.0, 10000.0) * tf.sign(amplification_update)
-            projection = gamma * tf.sign(project_noise(cut_noise, P_kern, kern_size))
+            projection = gamma * tf.sign(project_noise(cut_noise, P_kern, kern_size))#*W_s_input)
 
             # Occasionally, when the adversarial examples are crafted for an ensemble of networks with residual block by combined methods,
             # you may neet to comment the following line to get better result.
@@ -317,7 +354,6 @@ def main(_):
             adv_input_update = adv_input_update + alpha_beta * tf.sign(noise) + projection
         else:
             adv_input_update = adv_input_update + alpha * tf.sign(noise)
-
 
         saver=tf.train.Saver()
         with tf.Session() as sess:
@@ -340,7 +376,13 @@ def main(_):
                 labels= to_categorical(np.concatenate([target_labels,labels,labels],axis=-1),num_classes)
                 #labels = sess.run(one_hot, feed_dict={ori_input: images_tmp, adv_input: images_tmp})
 
-                images_adv=image_preprocessing_fn(np.copy(images))
+                #add some noise to avoid F_{k}(x)-F_{k}(x')=0
+                if 'NRDM' in FLAGS.attack_method or 'PP' in FLAGS.attack_method:
+                    images_adv=images+np.random.normal(0,0.1,size=np.shape(images))
+                else:
+                    images_adv=images
+
+                images_adv=image_preprocessing_fn(np.copy(images_adv))
                 images_tmp_target=image_preprocessing_fn(np.copy(target_images))
                 images_tmp=image_preprocessing_fn(np.copy(images))
 
@@ -348,19 +390,22 @@ def main(_):
                 amplification_np=np.zeros(shape=batch_shape)
                 #weight_np = np.zeros(shape=shape)
                 weight_tgt = np.zeros(shape=shape)
-                weight_src = np.zeros(shape=shape)
+                weight_ori = np.zeros(shape=shape)
+
+                W_s = np.zeros(shape=batch_shape)
+
                 for i in range(num_iter):
                     # calculate the weights(feature importance) for FIA
-                    if i==0 and 'FIA' in FLAGS.attack_method:
+                    if i==0 and ('FIA' in FLAGS.attack_method or 'TFA' in FLAGS.attack_method):
 
                         # only use original image to obtain weights
                         if FLAGS.ens == 0:
                             images_tmp2 = image_preprocessing_fn(np.copy(images))
                             images_tmp2_target = image_preprocessing_fn(np.copy(target_images))
                             w, feature = sess.run([weights_tensor, opt_operations[0]],
-                                                  feed_dict={ori_input: images_tmp2_target, adv_input: images_tmp2,src_input:images_tmp2,label_ph: labels})
-                            weight_tgt = w[:FLAGS.batch_size]
-                            weight_src = w[FLAGS.batch_size:FLAGS.batch_size*2]
+                                                  feed_dict={ori_input: images_tmp2, adv_input: images_tmp2,tgt_input:images_tmp2_target,label_ph: labels})
+                            weight_tgt = w[FLAGS.batch_size*2:]
+                            weight_ori = w[FLAGS.batch_size:FLAGS.batch_size*2]
 
                         # # use ensemble masked image to obtain weights
                         # for l in range(int(FLAGS.ens)):
@@ -373,14 +418,28 @@ def main(_):
 
                         # normalize the weights
                         weight_tgt = -normalize(weight_tgt, 2)
-                        weight_src = -normalize(weight_src, 2)
+                        weight_ori = -normalize(weight_ori, 2)
+                    # if i==0 and 'PI' in FLAGS.attack_method:
+
+                    #     for i in range(FLAGS.batch_size):
+                    #         prob_eval = sess.run(prob,feed_dict={single_input:np.expand_dims(images_tmp[i],axis=0)})
+                    #         top0_result = np.argmax(prob_eval,axis=1)
+                    #         W_s0 = insp.gradcam(sess,images_tmp[0],top0_result+1-utils.offset[FLAGS.model_name])['heatmap']
+                    #         W_s[i] = np.stack([W_s0, W_s0, W_s0]).swapaxes(0,2)
+
 
                     # optimization
-                    images_adv, grad_np, amplification_np=sess.run([adv_input_update, noise, amplification_update],
-                                              feed_dict={ori_input:images_tmp_target,adv_input:images_adv,src_input:images_tmp,weights_tgt_placeholder:weight_tgt,weights_src_placeholder:weight_src,
+                    # images_adv, grad_np, amplification_np,loss_output,loss_output1,loss_output2 = sess.run([adv_input_update, noise, amplification_update,loss,loss1,loss2],
+                    #                           feed_dict={ori_input:images_tmp,adv_input:images_adv,tgt_input:images_tmp_target,weights_tgt_placeholder:weight_tgt,weights_ori_placeholder:weight_ori,
+                    #                                      label_ph:labels,accumulated_grad_ph:grad_np,amplification_ph:amplification_np,W_s_input:W_s})
+
+                    images_adv, grad_np, amplification_np,loss_output= sess.run([adv_input_update, noise, amplification_update,loss],
+                                              feed_dict={ori_input:images_tmp,adv_input:images_adv,tgt_input:images_tmp_target,weights_tgt_placeholder:weight_tgt,weights_ori_placeholder:weight_ori,
                                                          label_ph:labels,accumulated_grad_ph:grad_np,amplification_ph:amplification_np})
                     images_adv = np.clip(images_adv, images_tmp - eps, images_tmp + eps)
-
+                    print('loss___',loss_output)
+                    # print('loss1___',loss_output1)
+                    # print('loss2___',loss_output2)
                 images_adv = inv_image_preprocessing_fn(images_adv)
                 utils.save_image(images_adv, names, FLAGS.output_dir)
 
