@@ -2,7 +2,7 @@
 
 This repository contains the code for the paper: 
 
-**[Improving the Transferability of Adversarial Attacks via Self-Ensemble](https://arxiv.org/pdf/2107.14185.pdf)**
+**[Improving the Transferability of Adversarial Attacks via Self-Ensemble](https:)**
 
 ## Requirements
 
@@ -26,7 +26,7 @@ This repository contains the code for the paper:
 
 ##### Generate adversarial examples:
 
-- FIA
+- SEFA
 
 ```
 python attack.py --model_name vgg_16 --attack_method FIA --layer_name vgg_16/conv3/conv3_3/Relu --ens 30 --probb 0.7 --output_dir ./adv/FIA/
@@ -38,7 +38,7 @@ python attack.py --model_name vgg_16 --attack_method FIA --layer_name vgg_16/con
 python attack.py --model_name vgg_16 --attack_method PIM --amplification_factor 10 --gamma 1 --Pkern_size 3 --output_dir ./adv/PIM/
 ```
 
-- FIA+PIDIM
+- SEFA+PIDIM
 
 ```
 python attack.py --model_name vgg_16 --attack_method FIAPIDIM --layer_name vgg_16/conv3/conv3_3/Relu --ens 30 --probb 0.7 --amplification_factor 2.5 --gamma 0.5 --Pkern_size 3 --image_size 224 --image_resize 250 --prob 0.7 --output_dir ./adv/FIAPIDIM/
@@ -57,11 +57,11 @@ python verify.py --ori_path ./dataset/images/ --adv_path ./adv/FIA/ --output_fil
 If you find this work is useful in your research, please consider citing:
 
 ```
-@inproceedings{wang2021feature,
-  title={Feature importance-aware transferable adversarial attacks},
-  author={Wang, Zhibo and Guo, Hengchang and Zhang, Zhifei and Liu, Wenxin and Qin, Zhan and Ren, Kui},
-  booktitle={Proceedings of the IEEE/CVF International Conference on Computer Vision},
-  pages={7639--7648},
-  year={2021}
+@inproceedings{cheng,
+  title={Improving the Transferability of Adversarial Attacks via Self-Ensemble},
+  author={Shuyan Cheng, Peng Li, Jianguo Liu, He Xu, and Yudong Yao},
+  booktitle={},
+  pages={},
+  year={2024}
   }
 ```
